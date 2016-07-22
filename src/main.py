@@ -21,10 +21,10 @@ def center(toplevel):
     toplevel.update_idletasks()
     w = toplevel.winfo_screenwidth()
     h = toplevel.winfo_screenheight()
-    size = tuple(int(_) for _ in toplevel.wm_geometry().split('+')[0].split('x'))
+    size = tuple(int(_) for _ in toplevel.geometry().split('+')[0].split('x'))
     x = w/2 - size[0]/2
     y = h/2 - size[1]/2
-    toplevel.wm_geometry("%dx%d+%d+%d" % (size + (x, y)))
+    toplevel.geometry("%dx%d+%d+%d" % (size + (x, y)))
 
 class TextHandler(logging.Handler):
     """This class allows you to log to a Tkinter Text or ScrolledText widget"""
@@ -60,7 +60,6 @@ class LoginForm(Toplevel):
             self.title(title)
 
         self.parent = parent
-        #self.grab_set()
         body = Frame(self)
         self.initial_focus = self.body(body)
         body.pack(padx=5, pady=5)
@@ -73,10 +72,10 @@ class LoginForm(Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
         if self.parent is not None:
-            center(self)
+            center(self.parent)
             
             #self.geometry("+%d+%d" % (parent.winfo_rootx()+50,
-            #                          parent.winfo_rooty()+50))
+            #                         parent.winfo_rooty()+50))
 
         self.deiconify() # become visible now
 
@@ -85,7 +84,7 @@ class LoginForm(Toplevel):
         # wait for window to appear on screen before calling grab_set
         self.wait_visibility()
         
-        #self.grab_set()
+        self.grab_set()
         
         self.wait_window(self) 
             
@@ -197,7 +196,7 @@ class Application():
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
         main_frame.grid(row=0, column=0, sticky=NSEW)
-        LoginForm(main_frame,'用户登陆')
+        LoginForm(root,'用户登陆')
         root.protocol("WM_DELETE_WINDOW", self.quit_func)
 
     def quit_func(self):          
