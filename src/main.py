@@ -16,16 +16,15 @@ from ldap3 import Server, Connection, SIMPLE, SYNC, ALL, SASL, NTLM
 from dataset import *
 import logging 
 import datetime
-'''
+
 def center(toplevel):
     toplevel.update_idletasks()
     w = toplevel.winfo_screenwidth()
     h = toplevel.winfo_screenheight()
-    size = tuple(int(_) for _ in toplevel.geometry().split('+')[0].split('x'))
+    size = tuple(int(_) for _ in toplevel.wm_geometry().split('+')[0].split('x'))
     x = w/2 - size[0]/2
     y = h/2 - size[1]/2
-    toplevel.geometry("%dx%d+%d+%d" % (size + (x, y)))
-'''
+    toplevel.wm_geometry("%dx%d+%d+%d" % (size + (x, y)))
 
 class TextHandler(logging.Handler):
     """This class allows you to log to a Tkinter Text or ScrolledText widget"""
@@ -74,9 +73,10 @@ class LoginForm(Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
         if self.parent is not None:
-            #center(self.parent)
-            self.geometry("+%d+%d" % (parent.winfo_rootx()+50,
-                                      parent.winfo_rooty()+50))
+            center(self)
+            
+            #self.geometry("+%d+%d" % (parent.winfo_rootx()+50,
+            #                          parent.winfo_rooty()+50))
 
         self.deiconify() # become visible now
 
