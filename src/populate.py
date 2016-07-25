@@ -41,7 +41,15 @@ def init_database():
     mbom_db.create_tables([id_generator, mat_basic_info, mat_extra_info, mat_info, bom_header,bom_item, prj_bom_link])
     #nstd_mat_fin.get(nstd_mat_fin.mat_no=='330172045')
     #nstd_mat_fin.delete_instance(nstd_mat_table)
-    mbom_db.close()    
+    
+def insert_data_into_tables():
+    q = id_generator.insert(desc='BOM header ID取号',step=1,current=1, pre_character='BH')
+    q.execute()
+
+def close_database():
+    mbom_db.close()
     
 if __name__ == '__main__':
     init_database()
+    insert_data_into_tables()
+    close_database()
