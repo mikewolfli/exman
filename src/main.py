@@ -71,9 +71,8 @@ class LoginForm(Toplevel):
 
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
-        if self.parent is not None:
-            center(self.parent)
-            
+        center(self)
+        #if self.parent is not None:         
             #self.geometry("+%d+%d" % (parent.winfo_rootx()+50,
             #                         parent.winfo_rooty()+50))
 
