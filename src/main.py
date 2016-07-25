@@ -17,6 +17,11 @@ from dataset import *
 import logging 
 import datetime
 
+
+NAME = 'EDS非标物料处理'
+PUBLISH_KEY=' A ' #R - release , B - Beta , A- Alpha
+VERSION = '0.1.0'
+
 def center(toplevel):
     toplevel.update_idletasks()
     w = toplevel.winfo_screenwidth()
@@ -225,7 +230,7 @@ if __name__ == '__main__':
         geom_string = "%dx%d+0+0" % (width, height)
         root.wm_geometry(geom_string)
         
-    root.title('物料转换')
+    root.title(NAME+PUBLISH_KEY+VERSION)
     default_font = font.nametofont("TkDefaultFont")
     default_font.configure(size=10)  
     root.option_add("*Font", default_font)
