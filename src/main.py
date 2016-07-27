@@ -12,15 +12,21 @@ from tkinter import scrolledtext
 from tkinter import messagebox
 from tkinter import filedialog
 import tkinter.ttk as ttk
+import pandas as pd
+from pandastable import Table, TableModel
 from ldap3 import Server, Connection, SIMPLE, SYNC, ALL, SASL, NTLM
 from dataset import *
 import logging 
 import datetime
 
-
 NAME = 'EDS非标物料处理'
 PUBLISH_KEY=' A ' #R - release , B - Beta , A- Alpha
 VERSION = '0.1.0'
+
+mat_heads = ('位置号','物料号','中文名称','英文名称','图号','数量','单位','材料','重量','备注')
+
+
+mat_cols = ('col1','col2','col3','col4','col5','col6','col7','col8','col9','col10')
 
 def center(toplevel):
     toplevel.update_idletasks()
@@ -191,9 +197,109 @@ class mainframe(Frame):
         Frame.__init__(self, master)
         self.pack()
         
+        self.createWidgets()
+        
     def createWidgets(self):
-        pass
-
+        self.find_mode = StringVar()
+        self.find_combo = ttk.Combobox(self,textvariable = self.find_mode)
+        self.find_combo['values'] = ('列出物料BOM结构','查找物料的上层','查找物料关联项目','查找项目关联物料')
+        self.find_combo.current(0)
+        self.find_combo.grid(row =0,column=0, columnspan=2,sticky=EW)
+        
+        self.find_var = StringVar()
+        self.find_text = Entry(self, textvariable=self.find_var)
+        self.find_text.grid(row=1, column=0, columnspan=2, sticky=EW)
+                
+        st_body = Frame(self)
+        st_body.grid(row=0, column=2, columnspan=10, sticky=NSEW)
+        
+        self.import_button = Button(st_body, text='文件读取')
+        self.import_button.pack(side='left')
+        
+        self.check_sap = Button(st_body, text='非标物料系统比对')
+        self.check_sap.pack(side='left')
+        
+        self.generate_nstd_list = Button(st_body, text='生成非标物料申请表')
+        self.generate_nstd_list.pack(side='left')
+               
+        ie_body = Frame(self)
+        ie_body.grid(row=1, column=2, columnspan=10, sticky=NSEW)
+        
+        self.import_bom_List = Button(ie_body, text='生成BOM导入表')
+        self.import_bom_List.pack(side='left')
+        
+        self.ntbook = ttk.Notebook(self)
+        self.ntbook.grid(row=2, column=0, rowspan=8, columnspan=13, sticky=NSEW)
+        
+        #self.rowconfigure(8, weight=1)
+        
+        #self.columnconfigure(12, weight=1)
+        self.ntbook.rowconfigure(0, weight=1)
+        self.ntbook.columnconfigure(0, weight=1)
+        
+        list_pane = Frame(self)
+        model = TableModel(rows=0, columns=0)
+        for col in mat_heads:
+            model.addColumn(col)
+        model.addRow(1)
+        
+        self.mat_table = Table(list_pane, model, editable=False)
+        self.mat_table.show()
+                 
+        tree_pane = Frame(self)
+        self.mat_tree = ttk.Treeview(tree_pane, show='headings', columns=mat_cols,selectmode='extended')
+        style = ttk.Style()
+        style.configure("Treeview", font=('TkDefaultFont', 10))
+        style.configure("Treeview.Heading", font=('TkDefaultFont', 9))  
+        self.mat_tree.heading('#0', text='')
+        for col in mat_cols:
+            i = mat_cols.index(col)
+            self.mat_tree.heading(col,text=mat_heads[i])
+        
+        #('位置号','物料号','中文名称','英文名称','图号','数量','单位','材料','重量','备注')
+        self.mat_tree.column('#0', width=20)
+        self.mat_tree.column('col1', width=80, anchor='w')
+        self.mat_tree.column('col2', width=100, anchor='w')
+        self.mat_tree.column('col3', width=150, anchor='w')
+        self.mat_tree.column('col4', width=150, anchor='w')
+        self.mat_tree.column('col5', width=100, anchor='w')
+        self.mat_tree.column('col6', width=100, anchor='w')
+        self.mat_tree.column('col7', width=100, anchor='w')
+        self.mat_tree.column('col8', width=150, anchor='w')
+        self.mat_tree.column('col9', width=100, anchor='w')
+        self.mat_tree.column('col10', width=300, anchor='w')      
+               
+        ysb = ttk.Scrollbar(tree_pane, orient='vertical', command=self.mat_tree.yview)
+        xsb = ttk.Scrollbar(tree_pane, orient='horizontal', command=self.mat_tree.xview)        
+        ysb.grid(row=0, column=2, rowspan=2, sticky='ns')
+        xsb.grid(row=2, column=0, columnspan=2, sticky='ew')  
+        
+        self.mat_tree.configure(yscroll=ysb.set, xscroll=xsb.set)
+        self.mat_tree.grid(row=0, column=0, rowspan=2, columnspan=2, sticky='nsew')
+        tree_pane.rowconfigure(1, weight=1)
+        tree_pane.columnconfigure(1, weight =1)
+        
+        self.ntbook.add(list_pane, text='BOM清单', sticky=NSEW)
+        self.ntbook.add(tree_pane, text='BOM树形结构', sticky=NSEW) 
+        
+        self.log_label=Label(self)
+        self.log_label["text"]="操作记录"
+        self.log_label.grid(row=10,column=0, sticky=W)
+        
+        self.log_text=scrolledtext.ScrolledText(self, state='disabled')
+        self.log_text.config(font=('TkFixedFont', 10, 'normal'))
+        self.log_text.grid(row=11, column=0, rowspan=3, columnspan=13,sticky=NSEW)
+        
+        # Create textLogger
+        text_handler = TextHandler(self.log_text)        
+        # Add the handler to logger
+        self.logger = logging.getLogger()
+        self.logger.addHandler(text_handler)
+        self.logger.setLevel(logging.INFO) 
+        
+        self.rowconfigure(9, weight=1)
+        self.columnconfigure(11, weight=1)   
+                
 class Application():
     def __init__(self, root):      
         main_frame = mainframe(root)
