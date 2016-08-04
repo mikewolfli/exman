@@ -18,15 +18,56 @@ from ldap3 import Server, Connection, SIMPLE, SYNC, ALL, SASL, NTLM
 from dataset import *
 import logging 
 import datetime
+from openpyxl import *
+from treelib import Tree, Node
+from decimal import Decimal
+from numpy.core.defchararray import isdecimal
 
 NAME = 'EDS非标物料处理'
 PUBLISH_KEY=' A ' #R - release , B - Beta , A- Alpha
 VERSION = '0.1.0'
 
-mat_heads = ('位置号','物料号','中文名称','英文名称','图号','数量','单位','材料','重量','备注')
+logger = logging.getLogger()
 
+def value2key(dic, value):
+    if not isinstance(dic, dict):
+        return None
+    
+    for key, val in dic.items():
+        if val == value:
+            return key
+    
+    return None
 
-mat_cols = ('col1','col2','col3','col4','col5','col6','col7','col8','col9','col10')
+def date2str(dt_s):
+    if not isinstance(dt_s, datetime.datetime):
+        return None
+    else:
+        return dt_s.strftime("%Y-%m-%d") 
+
+def datetime2str(dt_s):
+    if not isinstance(dt_s, datetime.datetime):
+        return None
+    else:
+        return dt_s.strftime("%Y-%m-%d %H:%M:%S") 
+    
+def str2date(dt_s):
+    if dt_s is None or (len(dt_s)==0 and isinstance(dt_s, str)):
+        return None
+    else:
+        return datetime.datetime.strptime(dt_s , '%Y-%m-%d')
+    
+def str2datetime(dt_s):
+    if dt_s is None or (len(dt_s)==0 and isinstance(dt_s, str)) :
+        return None
+    else:
+        return datetime.datetime.strptime(dt_s, "%Y-%m-%d %H:%M:%S") 
+
+def none2str(val):
+    if not val:
+        return ''
+    else:
+        return val.rstrip()
 
 def center(toplevel):
     toplevel.update_idletasks()
@@ -57,7 +98,7 @@ class TextHandler(logging.Handler):
         # This is necessary because we can't modify the Text from other threads
         self.text.after(0, append)# Scroll to the bottom
         
-login_info ={'uid':'','pwd':'','status':False,'perm':'0000'}
+login_info ={'uid':'','pwd':'','status':False,'perm':'0000','plant':'2101'}
         
 class LoginForm(Toplevel):
     def __init__(self, parent, title=None):
@@ -141,6 +182,8 @@ class LoginForm(Toplevel):
             login_info['status'] = True
             self.get_permission()
             self.log_login()
+            
+            logger.info(login_info['uid']+"登陆系统...")
             return 1
         else:
             self.msg_str.set('登陆失败！')
@@ -192,7 +235,26 @@ class LoginForm(Toplevel):
         except op_permission.DoesNotExist:
             pass
 
+mat_heads = ['位置号','物料号','中文名称','英文名称','图号','数量','单位','材料','重量','备注','非标判断']
+mat_keys = ['st_no','mat_no','mat_name_cn','mat_name_en','drawing_no','qty','mat_unit','mat_material','part_weight','comments','is_nonstd']
+
+mat_cols = ['col1','col2','col3','col4','col5','col6','col7','col8','col9','col10','col11']
+
 class mainframe(Frame):
+    '''
+    mat_list = {1:{'位置号':value,'物料号':value, ....,'标判断':value},.....,item:{......}}
+    mat_tree : 物料BOM的树形结构， 取t_list的key,如下:
+    0
+    ├── 1
+    │   └── 3
+    └── 2
+    '''
+    mat_list = {}
+    struct_code=''
+    bom_tree = Tree()
+    bom_tree.create_node(0,0)
+    mat_pos = 0
+    mat_tops={}
     def __init__(self,master=None):
         Frame.__init__(self, master)
         self.pack()
@@ -211,10 +273,11 @@ class mainframe(Frame):
         self.find_text.grid(row=1, column=0, columnspan=2, sticky=EW)
                 
         st_body = Frame(self)
-        st_body.grid(row=0, column=2, columnspan=10, sticky=NSEW)
+        st_body.grid(row=0, column=2,sticky=NSEW)
         
         self.import_button = Button(st_body, text='文件读取')
         self.import_button.pack(side='left')
+        self.import_button['command'] = self.excel_import
         
         self.check_sap = Button(st_body, text='非标物料系统比对')
         self.check_sap.pack(side='left')
@@ -228,12 +291,7 @@ class mainframe(Frame):
         self.import_bom_List = Button(ie_body, text='生成BOM导入表')
         self.import_bom_List.pack(side='left')
         
-        self.ntbook = ttk.Notebook(self)
-        self.ntbook.grid(row=2, column=0, rowspan=8, columnspan=13, sticky=NSEW)
-        
-        #self.rowconfigure(8, weight=1)
-        
-        #self.columnconfigure(12, weight=1)
+        self.ntbook = ttk.Notebook(self)        
         self.ntbook.rowconfigure(0, weight=1)
         self.ntbook.columnconfigure(0, weight=1)
         
@@ -282,24 +340,159 @@ class mainframe(Frame):
         self.ntbook.add(list_pane, text='BOM清单', sticky=NSEW)
         self.ntbook.add(tree_pane, text='BOM树形结构', sticky=NSEW) 
         
-        self.log_label=Label(self)
+        log_pane = Frame(self)
+        
+        self.log_label=Label(log_pane)
         self.log_label["text"]="操作记录"
-        self.log_label.grid(row=10,column=0, sticky=W)
+        self.log_label.grid(row=0,column=0, sticky=W)
         
-        self.log_text=scrolledtext.ScrolledText(self, state='disabled')
+        self.log_text=scrolledtext.ScrolledText(log_pane, state='disabled')
         self.log_text.config(font=('TkFixedFont', 10, 'normal'))
-        self.log_text.grid(row=11, column=0, rowspan=3, columnspan=13,sticky=NSEW)
+        self.log_text.grid(row=1, column=0, columnspan=2, sticky=EW)
+        log_pane.rowconfigure(1,weight=1)
+        log_pane.columnconfigure(1, weight=1)
         
+        self.ntbook.grid(row=2, column=0, rowspan=6, columnspan=6, sticky=NSEW)
+        log_pane.grid(row=8, column=0,columnspan=6, sticky=NSEW)
+              
         # Create textLogger
         text_handler = TextHandler(self.log_text)        
         # Add the handler to logger
-        self.logger = logging.getLogger()
-        self.logger.addHandler(text_handler)
-        self.logger.setLevel(logging.INFO) 
         
-        self.rowconfigure(9, weight=1)
-        self.columnconfigure(11, weight=1)   
+        logger.addHandler(text_handler)
+        logger.setLevel(logging.INFO) 
+        
+        self.rowconfigure(8, weight=1)
+        self.columnconfigure(5, weight=1) 
+        
+    def excel_import(self):
+        file_list = filedialog.askopenfilenames(title="导入文件", filetypes=[('excel file','.xlsx'),('excel file','.xlsm')])
+        if not file_list:
+            return
+
+        self.mat_list = {}
+        self.struct_code=''
+        self.mat_pos = 0
+        self.mat_tops = {}
+        for node in self.bom_tree.children(0):
+            self.bom_tree.remove_node(node.identifier)
+
+        for file in file_list:
+            logger.info("正在读取文件:"+file+",转换保存物料信息,同时构建数据Model")
+            c=self.read_excel_files(file)
+            logger.info("文件:"+file+"读取完成, 共计处理 "+str(c)+" 个物料。")
+            
+        df = pd.DataFrame(self.mat_list,index=mat_heads, columns=[ i for i in range(1, self.mat_pos+1)])
+        model = TableModel(dataframe=df.T)
+        self.mat_table.updateModel(model)
+        self.mat_table.redraw()
+        
+    def save_mat_info(self,method=False,**para):
+        try:
+            mat_info.get(mat_info.mat_no == para['mat_no'])
+            if method:
+                q = mat_info.update(mat_name_en=para['mat_name_en'], mat_name_cn=para['mat_name_cn'], drawing_no=para['drawing_no'],mat_material=para['mat_material'],mat_unit=para['mat_unit'],\
+                                mat_material_en=para['mat_material_en'],part_weight=para['part_weight'],comments=para['comments'],modify_by=login_info['uid'],modify_on=datetime.datetime.now()).where(mat_info.mat_no==para['mat_no']) 
+                return q.execute()                          
+        except mat_info.DoesNotExist:
+            q = mat_info.insert(mat_no=para['mat_no'], mat_name_en=para['mat_name_en'], mat_name_cn=para['mat_name_cn'], drawing_no=para['drawing_no'],mat_material=para['mat_material'],mat_unit=para['mat_unit'],\
+                                mat_material_en=para['mat_material_en'],part_weight=para['part_weight'],comments=para['comments'],modify_by=login_info['uid'],modify_on=datetime.datetime.now())
+            return q.execute()
+        
+        return 0
+        
+    def build_tree_struct(self):
+        pass
+ 
+    def read_excel_files(self, file):
+        '''
+                返回值：
+                -2: 读取EXCEL失败
+                -1 : 头物料位置为空
+                0： 头物料的版本已经存在
+                1： 
+       
+        '''
+        wb = load_workbook(file, read_only=True, data_only=True)
+        sheetnames=wb.get_sheet_names()
+        
+        if len(sheetnames)==0:
+            return -2
+        
+        counter=0
+        for i in range(len(sheetnames)): 
+            for j in range(1,19):                         
+                mat_line = {}
+                mat_top_line={}
+                ws = wb.get_sheet_by_name(sheetnames[i]) 
+            
+                mat_line[mat_heads[0]]=none2str(ws.cell(row=2*j+1,column=2))
+                mat_line[mat_heads[1]]=none2str(ws.cell(row=2*j+1,column=5))
+                if len(mat_line[mat_heads[1]])==0:
+                    break
+                           
+                mat_line[mat_heads[2]]=none2str(ws.cell(row=2*j+1,column=7))
+                mat_line[mat_heads[3]]=none2str(ws.cell(row=2*j+2,column=7))
+                mat_line[mat_heads[4]] = none2str(ws.cell(row=2*j+1, column=6))
                 
+                qty = none2str(ws.cell(row=2*j+1,column=3))
+                if len(qty)==0 or Decimal(qty)==0: 
+                    continue
+                
+                self.mat_pos+=1
+                counter+=1
+                
+                mat_line[mat_heads[5]] = Decimal(qty)
+                mat_line[mat_heads[6]]=none2str(ws.cell(row=2*j+1,column=4))
+                mat_line[mat_heads[7]] = none2str(ws.cell(row=2*j+1,column=9))
+                material_en = none2str(ws.cell(row=2*j+2, column=9))
+                
+                weight = none2str(ws.cell(row=2*j+1, column=10))
+                if len(weight)==0:
+                    mat_line[mat_heads[8]]=0
+                else:
+                    mat_line[mat_heads[8]]=Decimal(weight)
+                    
+                mat_line[mat_heads[9]]=none2str(ws.cell(row=2*j+1, column=11))
+                
+                #保存物料基本信息
+                if self.save_mat_info(mat_no=mat_line[mat_heads[1]], mat_name_en=mat_line[mat_heads[3]], mat_name_cn=mat_line[mat_heads[2]], drawing_no=mat_line[mat_heads[4]],mat_material=mat_line[mat_heads[7]],mat_unit=mat_line[mat_heads[6]],\
+                                mat_material_en=material_en,part_weight=mat_line[mat_heads[8]],comments=mat_line[mat_heads[9]])==0:
+                    logger.info(mat_line[mat_heads[1]]+'数据库中已经存在,故没有保存')
+                else:
+                    logger.info(mat_line[mat_heads[1]]+'保存成功。')
+                                
+                if i==0 and j==1:
+                    mat_top_line['revision'] = none2str(ws.cell(row=43, column=8))
+                    mat_top_line['struct_code']=none2str(ws.cell(row=39,column=12))
+                    
+                    self.mat_tops[mat_line[mat_heads[1]]]=mat_top_line
+                
+                self.mat_list[self.mat_pos] = mat_line
+                
+        return counter
+                
+                                      
+    def bom_id_generator(self):
+        try:
+            bom_res = id_generator.get(id_generator.id == 1)
+        except id_generator.DoesNotExist:
+            return None
+        
+        pre_char = bom_res.pre_character
+        fol_char = bom_res.fol_character
+        c_len = bom_res.id_length
+        cur_id = bom_res.id_length
+        step = bom_res.step        
+        new_id=str(cur_id+step)
+        #前缀+前侧补零后长度为c_len+后缀, 组成新的BOM id               
+        id_char = pre_char+new_id.zfill(c_len)+fol_char
+        
+        q=id_generator.update(current=cur_id+step).where(id_generator.id==1)
+        q.execute()
+        
+        return id_char
+                              
 class Application():
     def __init__(self, root):      
         main_frame = mainframe(root)

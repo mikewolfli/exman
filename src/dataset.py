@@ -139,7 +139,7 @@ class nstd_app_link(BaseModel):
         
 class id_generator(BaseModel):
     id = PrimaryKeyField()
-    desc = CharField(null=True, max_length=255)
+    func_desc = CharField(null=True, max_length=255)
     step = IntegerField(default=1)
     current = IntegerField()
     id_length = IntegerField(default=24)
@@ -194,6 +194,7 @@ class mat_info(BaseModel):
     mat_name_cn = CharField(max_length=128)
     drawing_no = CharField(null=True, max_length=32)
     mat_material = CharField(null=True, max_length= 255)
+    mat_material_en = CharField(null=True, max_length= 255)
     part_weight = DecimalField(max_digits=10, decimal_places=3, null=True)
     mat_unit = CharField(max_length=16, choices=Unit_Types)
     comments = TextField(null=True) 
@@ -213,6 +214,7 @@ class bom_header(BaseModel):
     mat_no = ForeignKeyField(mat_info, to_field='mat_no')
     drawing_no = CharField(null=True, max_length=32)
     revision = CharField(null=True, max_length=16)
+    is_active = BooleanField(default=True)
     struct_code = CharField(null=True, max_length=32)
     modify_by = CharField(null=True, max_length=12)
     modify_on = DateTimeField(formats='%Y-%m-%d %H:%M:%S', null=True)
