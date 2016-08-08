@@ -12,14 +12,14 @@ from tkinter import scrolledtext
 from tkinter import messagebox
 from tkinter import filedialog
 import tkinter.ttk as ttk
-import pandas as pd
-from pandastable import Table, TableModel
+#import pandas as pd
+#from pandastable import Table, TableModel
 from ldap3 import Server, Connection, SIMPLE, SYNC, ALL, SASL, NTLM
 from dataset import *
 import logging 
 import datetime
 from openpyxl import *
-from treelib import Tree, Node
+#from treelib import Tree, Node
 from decimal import Decimal
 from numpy.core.defchararray import isdecimal
 
@@ -67,7 +67,27 @@ def none2str(val):
     if not val:
         return ''
     else:
-        return val.rstrip()
+        return str(val).strip()
+    
+def cell2str(val):
+    if (val is None) or (val=='N/A') or (val=='N') or (val=='无'):
+        return ''
+    else:
+        return str(val).strip()
+
+def tree_level(val):
+    l = len(val)
+    if l==0:
+        return 0
+    
+    r=1
+    for i in range(l):
+        if int(val[i])>0:
+            return r
+        elif int(val[i])==0:
+            r+=1
+            
+    return r
 
 def center(toplevel):
     toplevel.update_idletasks()
@@ -240,10 +260,18 @@ mat_keys = ['st_no','mat_no','mat_name_cn','mat_name_en','drawing_no','qty','mat
 
 mat_cols = ['col1','col2','col3','col4','col5','col6','col7','col8','col9','col10','col11']
 
+def dict2list(dict):
+    li = []
+    
+    for i in range(len(mat_heads)):
+        li.append(dict[mat_heads[i]])
+    
+    return li
+
 class mainframe(Frame):
     '''
     mat_list = {1:{'位置号':value,'物料号':value, ....,'标判断':value},.....,item:{......}}
-    mat_tree : 物料BOM的树形结构， 取t_list的key,如下:
+    bom_tree : 物料BOM的树形结构, 以key为节点,保存om树型结构如下:
     0
     ├── 1
     │   └── 3
@@ -251,8 +279,9 @@ class mainframe(Frame):
     '''
     mat_list = {}
     struct_code=''
-    bom_tree = Tree()
-    bom_tree.create_node(0,0)
+    #treeview本身是树形结构，无需在重新构建树形model
+    #bom_tree = Tree()
+    #bom_tree.create_node(0,0)
     mat_pos = 0
     mat_tops={}
     def __init__(self,master=None):
@@ -294,7 +323,8 @@ class mainframe(Frame):
         self.ntbook = ttk.Notebook(self)        
         self.ntbook.rowconfigure(0, weight=1)
         self.ntbook.columnconfigure(0, weight=1)
-        
+        '''
+                清单式显示不够直观，同时pandastable表操作速度太慢，故只使用树形结构
         list_pane = Frame(self)
         model = TableModel(rows=0, columns=0)
         for col in mat_heads:
@@ -303,9 +333,10 @@ class mainframe(Frame):
         
         self.mat_table = Table(list_pane, model, editable=False)
         self.mat_table.show()
+        '''
                  
         tree_pane = Frame(self)
-        self.mat_tree = ttk.Treeview(tree_pane, show='headings', columns=mat_cols,selectmode='extended')
+        self.mat_tree = ttk.Treeview(tree_pane, columns=mat_cols,selectmode='extended')
         style = ttk.Style()
         style.configure("Treeview", font=('TkDefaultFont', 10))
         style.configure("Treeview.Heading", font=('TkDefaultFont', 9))  
@@ -315,7 +346,7 @@ class mainframe(Frame):
             self.mat_tree.heading(col,text=mat_heads[i])
         
         #('位置号','物料号','中文名称','英文名称','图号','数量','单位','材料','重量','备注')
-        self.mat_tree.column('#0', width=20)
+        self.mat_tree.column('#0', width=50)
         self.mat_tree.column('col1', width=80, anchor='w')
         self.mat_tree.column('col2', width=100, anchor='w')
         self.mat_tree.column('col3', width=150, anchor='w')
@@ -325,7 +356,8 @@ class mainframe(Frame):
         self.mat_tree.column('col7', width=100, anchor='w')
         self.mat_tree.column('col8', width=150, anchor='w')
         self.mat_tree.column('col9', width=100, anchor='w')
-        self.mat_tree.column('col10', width=300, anchor='w')      
+        self.mat_tree.column('col10', width=300, anchor='w')  
+        self.mat_tree.column('col11',width=100, anchor='w')    
                
         ysb = ttk.Scrollbar(tree_pane, orient='vertical', command=self.mat_tree.yview)
         xsb = ttk.Scrollbar(tree_pane, orient='horizontal', command=self.mat_tree.xview)        
@@ -337,7 +369,7 @@ class mainframe(Frame):
         tree_pane.rowconfigure(1, weight=1)
         tree_pane.columnconfigure(1, weight =1)
         
-        self.ntbook.add(list_pane, text='BOM清单', sticky=NSEW)
+        #self.ntbook.add(list_pane, text='BOM清单', sticky=NSEW)
         self.ntbook.add(tree_pane, text='BOM树形结构', sticky=NSEW) 
         
         log_pane = Frame(self)
@@ -374,19 +406,27 @@ class mainframe(Frame):
         self.struct_code=''
         self.mat_pos = 0
         self.mat_tops = {}
-        for node in self.bom_tree.children(0):
-            self.bom_tree.remove_node(node.identifier)
+        for row in self.mat_tree.get_children():
+            self.mat_tree.delete(row)
+             
+        #for node in self.bom_tree.children(0):
+            #self.bom_tree.remove_node(node.identifier)
 
         for file in file_list:
             logger.info("正在读取文件:"+file+",转换保存物料信息,同时构建数据Model")
             c=self.read_excel_files(file)
             logger.info("文件:"+file+"读取完成, 共计处理 "+str(c)+" 个物料。")
             
-        df = pd.DataFrame(self.mat_list,index=mat_heads, columns=[ i for i in range(1, self.mat_pos+1)])
-        model = TableModel(dataframe=df.T)
-        self.mat_table.updateModel(model)
-        self.mat_table.redraw()
+        #df = pd.DataFrame(self.mat_list,index=mat_heads, columns=[ i for i in range(1, self.mat_pos+1)])
+        #model = TableModel(dataframe=df.T)
+        #self.mat_table.updateModel(model)
+        #self.mat_table.redraw()
         
+        logger.info("正在生成BOM层次结构...")
+        c = self.build_tree_struct()
+        logger.info("Bom结构生成完成，共为"+str(c)+"个发运层物料生成BOM.")
+        
+              
     def save_mat_info(self,method=False,**para):
         try:
             mat_info.get(mat_info.mat_no == para['mat_no'])
@@ -400,10 +440,121 @@ class mainframe(Frame):
             return q.execute()
         
         return 0
+    
+    def is_leaf(self, item):
+        children = self.mat_tree.get_children(item)
         
+        if children is None:
+            return True
+        else:
+            return False
+        
+    def save_bom_list(self, item):
+        it_list = self.mat_tree.item(item, "values")
+        mat = it_list[1]
+        drawing = it_list[4]
+        
+        if mat in self.mat_tops.keys():
+            revision = self.mat_tops['revision']
+            st_code = self.mat_tops['struct_code']
+        else:
+            revision=''
+            st_code=''
+        
+        try:    
+            bom_header.get(bom_header.mat_no==mat & bom_header==revision & bom_header.is_active==True)
+            return 0
+        except bom_header.DoesNotExist:
+            b_id = self.bom_id_generator()
+            q=bom_header.insert(bom_id=b_id, mat_no=mat, revision=revision, drawing_no=drawing, struct_code=st_code,is_active=True,\
+                                modify_by=login_info['uid'],modify_on=datetime.datetime.now(), create_by=login_info['uid'],create_on=datetime.datetime.now())
+            q.execute()
+            
+        
+            
+    def get_rp_boxid(self, struct):
+        pass        
+    
+    def save_mats_bom(self):
+        items = self.mat_tree.get_children()
+        
+        if not items:
+            return 0
+        
+        for item in items:
+            l_item = item
+            while not self.is_leaf(l_item):
+                ch_items = self.mat_tree.get_children(item)
+    
+    
     def build_tree_struct(self):
-        pass
- 
+        if len(self.mat_list)==0:
+            return 0
+        
+        cur_level = 0
+        pre_level = 0
+        parent_node = self.mat_tree.insert('', END, values = dict2list(self.mat_list[1]))
+        counter =0
+        cur_node = parent_node
+        
+        self.mat_tree.item(parent_node, open=True)
+        
+        for i in range(1,self.mat_pos+1):
+            cur_level = tree_level(self.mat_list[i][mat_heads[0]])
+            if cur_level==0:
+                counter+=1
+                
+            if (pre_level == cur_level) and pre_level !=0:
+                cur_node = self.mat_tree.insert(parent_node, END,  values=dict2list(self.mat_list[i]))
+                
+            if pre_level<cur_level:
+                parent_node = cur_node
+                cur_node=self.mat_tree.insert(parent_node, END, values=dict2list(self.mat_list[i]))
+                
+            if pre_level>cur_level:
+                while pre_level > cur_level:
+                    parent_node = self.mat_tree.parent(parent_node)
+                    pre_level = tree_level(self.mat_tree.item(parent_node, 'values')[0])
+                    
+                cur_node=self.mat_tree.insert(parent_node, END, values=dict2list(self.mat_list[i]))
+                
+            pre_level = cur_level
+                
+        return counter
+
+    '''        
+    def build_tree_struct(self):
+        if len(self.mat_list)==0:
+            return
+        
+        cur_level=0
+        pre_level=0
+        parent_node=0
+        counter=0
+        for i in range(1, self.mat_pos+1):
+            cur_level = tree_level(self.mat_list[i][mat_heads[0]])
+            if cur_level==0:
+                counter+=1
+                
+            if pre_level == cur_level:
+                self.bom_tree.create_node(i,i,parent_node)
+                
+            if pre_level < cur_level:
+                parent_node = i-1
+                self.bom_tree.create_node(i,i,parent_node)
+                
+            if pre_level > cur_level:
+                while pre_level > cur_level:
+                    parent_node = self.bom_tree.parent(parent_node).identifier
+                    pre_level = tree_level(self.mat_list[parent_node][mat_heads[0]])
+                    
+                self.bom_tree.create_node(i,i,parent_node)
+                                 
+            pre_level = cur_level
+        
+        return counter
+    ''' 
+                     
     def read_excel_files(self, file):
         '''
                 返回值：
@@ -420,40 +571,44 @@ class mainframe(Frame):
             return -2
         
         counter=0
-        for i in range(len(sheetnames)): 
+        for i in range(0,len(sheetnames)): 
+            if not str(sheetnames[i]).isdigit():
+                continue
+            
             for j in range(1,19):                         
                 mat_line = {}
                 mat_top_line={}
                 ws = wb.get_sheet_by_name(sheetnames[i]) 
             
-                mat_line[mat_heads[0]]=none2str(ws.cell(row=2*j+1,column=2))
-                mat_line[mat_heads[1]]=none2str(ws.cell(row=2*j+1,column=5))
+                mat_line[mat_heads[0]]=cell2str(ws.cell(row=2*j+1,column=2).value)
+                mat_line[mat_heads[1]]=cell2str(ws.cell(row=2*j+1,column=5).value)
                 if len(mat_line[mat_heads[1]])==0:
                     break
                            
-                mat_line[mat_heads[2]]=none2str(ws.cell(row=2*j+1,column=7))
-                mat_line[mat_heads[3]]=none2str(ws.cell(row=2*j+2,column=7))
-                mat_line[mat_heads[4]] = none2str(ws.cell(row=2*j+1, column=6))
+                mat_line[mat_heads[2]]=cell2str(ws.cell(row=2*j+1,column=7).value)
+                mat_line[mat_heads[3]]=cell2str(ws.cell(row=2*j+2,column=7).value)
+                mat_line[mat_heads[4]] = cell2str(ws.cell(row=2*j+1, column=6).value)
                 
-                qty = none2str(ws.cell(row=2*j+1,column=3))
-                if len(qty)==0 or Decimal(qty)==0: 
+                qty = cell2str(ws.cell(row=2*j+1,column=3).value)
+                if len(qty)==0: 
                     continue
                 
                 self.mat_pos+=1
                 counter+=1
                 
                 mat_line[mat_heads[5]] = Decimal(qty)
-                mat_line[mat_heads[6]]=none2str(ws.cell(row=2*j+1,column=4))
-                mat_line[mat_heads[7]] = none2str(ws.cell(row=2*j+1,column=9))
-                material_en = none2str(ws.cell(row=2*j+2, column=9))
+                mat_line[mat_heads[6]]=cell2str(ws.cell(row=2*j+1,column=4).value)
+                mat_line[mat_heads[7]] = cell2str(ws.cell(row=2*j+1,column=9).value)
+                material_en = cell2str(ws.cell(row=2*j+2, column=9).value)
                 
-                weight = none2str(ws.cell(row=2*j+1, column=10))
+                weight = cell2str(ws.cell(row=2*j+1, column=10).value)
                 if len(weight)==0:
                     mat_line[mat_heads[8]]=0
                 else:
                     mat_line[mat_heads[8]]=Decimal(weight)
                     
-                mat_line[mat_heads[9]]=none2str(ws.cell(row=2*j+1, column=11))
+                mat_line[mat_heads[9]]=cell2str(ws.cell(row=2*j+1, column=11).value)
+                mat_line[mat_heads[10]]=''
                 
                 #保存物料基本信息
                 if self.save_mat_info(mat_no=mat_line[mat_heads[1]], mat_name_en=mat_line[mat_heads[3]], mat_name_cn=mat_line[mat_heads[2]], drawing_no=mat_line[mat_heads[4]],mat_material=mat_line[mat_heads[7]],mat_unit=mat_line[mat_heads[6]],\
@@ -462,9 +617,9 @@ class mainframe(Frame):
                 else:
                     logger.info(mat_line[mat_heads[1]]+'保存成功。')
                                 
-                if i==0 and j==1:
-                    mat_top_line['revision'] = none2str(ws.cell(row=43, column=8))
-                    mat_top_line['struct_code']=none2str(ws.cell(row=39,column=12))
+                if sheetnames[i]=='1' and j==1:
+                    mat_top_line['revision'] = cell2str(ws.cell(row=43, column=8).value)
+                    mat_top_line['struct_code']=cell2str(ws.cell(row=39,column=12).value)
                     
                     self.mat_tops[mat_line[mat_heads[1]]]=mat_top_line
                 
