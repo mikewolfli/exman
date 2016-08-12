@@ -225,7 +225,6 @@ class bom_header(BaseModel):
         db_table = 'bom_header'  
     
 class bom_item(BaseModel):
-    item_id = BigIntegerField(primary_key=True, unique=True)
     bom_id = ForeignKeyField(bom_header, to_field='bom_id', on_delete='CASCADE')
     st_no = CharField(max_length=32)
     component = ForeignKeyField(mat_info, to_field='mat_no')
@@ -238,6 +237,7 @@ class bom_item(BaseModel):
     create_on = DateTimeField(formats='%Y-%m-%d %H:%M:%S', null=True)     
     
     class Meta:
+        primary_key = CompositeKey('bom_id', 'st_no')
         db_table = 'bom_item'
         
 class prj_bom_link(BaseModel):

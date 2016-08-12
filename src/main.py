@@ -21,7 +21,10 @@ import datetime
 from openpyxl import *
 #from treelib import Tree, Node
 from decimal import Decimal
-from numpy.core.defchararray import isdecimal
+import pyrfc
+import threading
+import base64
+from configparser import ConfigParser
 
 NAME = 'EDS非标物料处理'
 PUBLISH_KEY=' A ' #R - release , B - Beta , A- Alpha
@@ -268,6 +271,19 @@ def dict2list(dict):
     
     return li
 
+#threads=[]
+threadLock = threading.Lock()
+class refresh_thread(threading.Thread):
+    def __init__(self, frame, typ=None):
+        threading.Thread.__init__(self)
+        self.frame=frame
+        self.type=typ
+
+    def run(self):
+        threadLock.acquire()
+        self.frame.check_in_sap()
+        threadLock.release()  
+
 class mainframe(Frame):
     '''
     mat_list = {1:{'位置号':value,'物料号':value, ....,'标判断':value},.....,item:{......}}
@@ -279,11 +295,13 @@ class mainframe(Frame):
     '''
     mat_list = {}
     struct_code=''
+    bom_items = []
     #treeview本身是树形结构，无需在重新构建树形model
     #bom_tree = Tree()
     #bom_tree.create_node(0,0)
     mat_pos = 0
     mat_tops={}
+    nstd_mat_list=[]
     def __init__(self,master=None):
         Frame.__init__(self, master)
         self.pack()
@@ -310,6 +328,7 @@ class mainframe(Frame):
         
         self.check_sap = Button(st_body, text='非标物料系统比对')
         self.check_sap.pack(side='left')
+        self.check_sap['command']= self.run_check_in_sap
         
         self.generate_nstd_list = Button(st_body, text='生成非标物料申请表')
         self.generate_nstd_list.pack(side='left')
@@ -397,6 +416,69 @@ class mainframe(Frame):
         self.rowconfigure(8, weight=1)
         self.columnconfigure(5, weight=1) 
         
+    def run_check_in_sap(self):
+        if self.sap_thread.is_alive():
+            messagebox.showinfo('提示','正在后台检查SAP非标物料，请等待完成后再点击!')
+            return            
+        
+        self.sap_thread = refresh_thread(self)
+        self.sap_thread.setDaemon(True)
+        self.sap_thread.start()
+        
+    def check_in_sap(self):
+        logger.info("正在登陆SAP...")
+        config = ConfigParser()
+        config.read('sapnwrfc.cfg')
+        para_conn  = config._sections['connection']
+        para_conn['user'] = base64.b64encode(para_conn['user']).decode()
+        para_conn['passwd'] = base64.b64decode(para_conn['passwd']).decode()
+        
+        mats =  []
+        for i in range(1, len(self.mat_list)+1):
+            mat = self.mat_list[i][mat_heads[1]]
+            if mat not in mats:
+                mats.append(mat)
+        
+        try:
+            conn = pyrfc.Connection(**para_conn)
+            
+            imp = []
+            for mat in mats:
+                line = dict(MATNR=mat, WERKS='2101')
+                imp.append(line)
+            
+            logger.info("正在调用RFC函数...")
+            result = conn.call('ZAP_PS_MATERIAL_INFO', IT_CE_MARA=imp, CE_SPRAS='1')
+            
+            std_mats=[]
+            for re in result['OT_CE_MARA']:
+                std_mats.append(re['MATNR'])
+                
+            for mat in mats:
+                if mat not in std_mats:
+                    logger.info("标记非标物料:"+mat)
+                    self.nstd_mat_list.append(mat)
+                    self.mark_nstd_mat(mat)
+            logger.info("非标物料确认完成，共计"+str(len(self.nstd_mat_list))+"个非标物料。")
+            
+        except pyrfc.CommunicationError:
+            logger.error("无法连接服务器")
+            return -1
+        except pyrfc.LogonError:
+            logger.error("无法登陆，帐户密码错误！")
+            return -1
+        except (pyrfc.ABAPApplicationError, pyrfc.ABAPRuntimeError):
+            logger.error("函数执行错误。")
+            return -1
+        
+        conn.close()
+          
+        return len(self.nstd_mat_list)
+        
+    def mark_nstd_mat(self, mat):
+        q = mat_info.update(is_nonstd=True).where(mat_info.mat_no==mat)
+        return q.execute()
+            
     def excel_import(self):
         file_list = filedialog.askopenfilenames(title="导入文件", filetypes=[('excel file','.xlsx'),('excel file','.xlsm')])
         if not file_list:
@@ -406,6 +488,7 @@ class mainframe(Frame):
         self.struct_code=''
         self.mat_pos = 0
         self.mat_tops = {}
+        self.nstd_mat_list=[]
         for row in self.mat_tree.get_children():
             self.mat_tree.delete(row)
              
@@ -426,7 +509,10 @@ class mainframe(Frame):
         c = self.build_tree_struct()
         logger.info("Bom结构生成完成，共为"+str(c)+"个发运层物料生成BOM.")
         
-              
+        logger.info("正在保存BOM")
+        c = self.save_mats_bom()
+        logger.info("共保存"+str(c)+"个物料BOM")
+                      
     def save_mat_info(self,method=False,**para):
         try:
             mat_info.get(mat_info.mat_no == para['mat_no'])
@@ -441,13 +527,15 @@ class mainframe(Frame):
         
         return 0
     
-    def is_leaf(self, item):
-        children = self.mat_tree.get_children(item)
+    def check_branch(self, item):
+        mat = self.mat_tree.item(item, "values")[1]
+        for li in self.bom_items:
+            if mat == self.mat_tree.item(li, "values")[1]:
+                return False
+            
+        self.bom_items.append(item)
         
-        if children is None:
-            return True
-        else:
-            return False
+        return True
         
     def save_bom_list(self, item):
         it_list = self.mat_tree.item(item, "values")
@@ -455,39 +543,59 @@ class mainframe(Frame):
         drawing = it_list[4]
         
         if mat in self.mat_tops.keys():
-            revision = self.mat_tops['revision']
-            st_code = self.mat_tops['struct_code']
+            revision = self.mat_tops[mat]['revision']
+            st_code = self.mat_tops[mat]['struct_code']
         else:
             revision=''
             st_code=''
         
         try:    
-            bom_header.get(bom_header.mat_no==mat & bom_header==revision & bom_header.is_active==True)
+            bom_header.get((bom_header.mat_no==mat) & (bom_header.revision==revision) & (bom_header.is_active==True))
+            logger.warning(mat+"BOM已经存在，无需重新创建!")
             return 0
         except bom_header.DoesNotExist:
             b_id = self.bom_id_generator()
-            q=bom_header.insert(bom_id=b_id, mat_no=mat, revision=revision, drawing_no=drawing, struct_code=st_code,is_active=True,\
+            q=bom_header.insert(bom_id=b_id, mat_no=mat, revision=revision, drawing_no=drawing, struct_code=st_code,is_active=True,plant=login_info['plant'],\
                                 modify_by=login_info['uid'],modify_on=datetime.datetime.now(), create_by=login_info['uid'],create_on=datetime.datetime.now())
             q.execute()
             
+        children = self.mat_tree.get_children(item)
         
+        data = []
+        for child in children:
+            d_line = {}
+            d_line['bom_id']=b_id
+            d_line['st_no'] = self.mat_tree.item(child, "values")[0]
+            d_line['component'] = self.mat_tree.item(child,"values")[1]
+            d_line['qty']= Decimal(self.mat_tree.item(child,"values")[5])
+            d_line['bom_remark']=self.mat_tree.item(child,"values")[9]
+            d_line['parent_mat'] = mat
+            d_line['modify_by']=login_info['uid']
+            d_line['modify_on']= datetime.datetime.now()
+            d_line['create_by']=login_info['uid']
+            d_line['create_on']=datetime.datetime.now()
             
+            data.append(d_line)
+            
+        q=bom_item.insert_many(data)
+        return q.execute()
+                        
     def get_rp_boxid(self, struct):
         pass        
     
     def save_mats_bom(self):
-        items = self.mat_tree.get_children()
-        
-        if not items:
+        if len(self.bom_items)==0:
             return 0
         
-        for item in items:
-            l_item = item
-            while not self.is_leaf(l_item):
-                ch_items = self.mat_tree.get_children(item)
-    
+        i=0
+        for item in self.bom_items:
+            if self.save_bom_list(item)>0:
+                i+=1
+        
+        return i    
     
     def build_tree_struct(self):
+        self.bom_items=[]
         if len(self.mat_list)==0:
             return 0
         
@@ -496,6 +604,7 @@ class mainframe(Frame):
         parent_node = self.mat_tree.insert('', END, values = dict2list(self.mat_list[1]))
         counter =0
         cur_node = parent_node
+        self.check_branch(parent_node)
         
         self.mat_tree.item(parent_node, open=True)
         
@@ -509,14 +618,21 @@ class mainframe(Frame):
                 
             if pre_level<cur_level:
                 parent_node = cur_node
+                self.check_branch(parent_node)
                 cur_node=self.mat_tree.insert(parent_node, END, values=dict2list(self.mat_list[i]))
                 
             if pre_level>cur_level:
-                while pre_level > cur_level:
+                while pre_level >= cur_level:
                     parent_node = self.mat_tree.parent(parent_node)
-                    pre_level = tree_level(self.mat_tree.item(parent_node, 'values')[0])
+                    if pre_level!=0:
+                        pre_level = tree_level(self.mat_tree.item(parent_node, 'values')[0])
+                    else:
+                        pre_level=-1
                     
                 cur_node=self.mat_tree.insert(parent_node, END, values=dict2list(self.mat_list[i]))
+                
+                if cur_level==0:
+                    self.mat_tree.item(cur_node, open=True)
                 
             pre_level = cur_level
                 
@@ -626,18 +742,17 @@ class mainframe(Frame):
                 self.mat_list[self.mat_pos] = mat_line
                 
         return counter
-                
-                                      
+                                                    
     def bom_id_generator(self):
         try:
             bom_res = id_generator.get(id_generator.id == 1)
         except id_generator.DoesNotExist:
             return None
         
-        pre_char = bom_res.pre_character
-        fol_char = bom_res.fol_character
+        pre_char = none2str(bom_res.pre_character)
+        fol_char = none2str(bom_res.fol_character)
         c_len = bom_res.id_length
-        cur_id = bom_res.id_length
+        cur_id = bom_res.current
         step = bom_res.step        
         new_id=str(cur_id+step)
         #前缀+前侧补零后长度为c_len+后缀, 组成新的BOM id               
