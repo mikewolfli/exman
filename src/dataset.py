@@ -21,6 +21,7 @@ Unit_Types=(
 )
 
 Justify_Types={
+    -1:'未激活',
     0: '未分类',
     1: 'CLU外购',
     2: 'PCU外购',
@@ -83,7 +84,19 @@ mbom_db = PostgresqlDatabase('nstd_mat_db',user='postgres',password='',host='loc
 class BaseModel(Model):
     class Meta:
         database=mbom_db
-           
+        
+class s_change_log(BaseModel):
+    table_name = CharField(max_length=64, null=False)
+    change_section = CharField(max_length=64, null=False)
+    key_word = CharField(max_length=64,null=False)
+    old_value = TextField(null=False)
+    new_value = TextField(null=False)
+    log_on = DateTimeField(null=True)
+    log_by = CharField(null=True, max_length=64)
+    
+    class Meta:
+        db_table = 's_change_log'
+              
 class s_employee(BaseModel):
     employee = CharField(db_column='employee_id',primary_key=True,max_length=8)
     name = CharField(null=True, max_length=32)
@@ -165,6 +178,25 @@ class mat_basic_info(BaseModel):
     
     class Meta:
         db_table='mat_basic_info'
+        
+class struct_group_code(BaseModel):
+    st_code = CharField(primary_key=True, max_length=16)
+    st_name_en = CharField(null=True,max_length=255)
+    st_name_cn = CharField(null=True, max_length=128)
+    m_or_e = CharField(null=True, max_length=4)
+    
+    class Meta:
+        db_table='struct_group_code'
+
+class struct_gc_rel(BaseModel):
+    st_code = ForeignKeyField(struct_group_code, to_field='st_code', on_delete='CASCADE')
+    plant = CharField(max_length=6)
+    elevator_type = CharField(null=True, max_length=12)
+    rp = CharField(null=True, max_length=6)  
+    box_code= CharField(null=True, max_length=8)
+    
+    class Meta:
+        db_table='struct_gc_rel'
 
 class mat_extra_info(BaseModel):
     mat_no = ForeignKeyField(mat_basic_info, to_field='mat_no', on_delete='CASCADE')
@@ -226,6 +258,7 @@ class bom_header(BaseModel):
     
 class bom_item(BaseModel):
     bom_id = ForeignKeyField(bom_header, to_field='bom_id', on_delete='CASCADE')
+    index = IntegerField()
     st_no = CharField(max_length=32)
     component = ForeignKeyField(mat_info, to_field='mat_no')
     qty = DecimalField(max_digits=10, decimal_places=2)
@@ -239,7 +272,7 @@ class bom_item(BaseModel):
     class Meta:
         primary_key = CompositeKey('bom_id', 'st_no')
         db_table = 'bom_item'
-        
+'''       
 class prj_bom_link(BaseModel):
     bom_id = ForeignKeyField(bom_header, to_field='bom_id', on_delete='CASCADE')
     wbs_no = CharField(null=True, max_length=16)
@@ -247,6 +280,7 @@ class prj_bom_link(BaseModel):
     class Meta:
         primary_key = CompositeKey('bom_id', 'wbs_no')
         db_table = 'prj_bom_link'
+'''
         
 class nstd_mat_table(BaseModel):
     mat_no = CharField(primary_key=True, max_length=18)

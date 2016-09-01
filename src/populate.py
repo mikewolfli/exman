@@ -38,12 +38,13 @@ def createData(rows=20, cols=5):
 
 def init_database():
     mbom_db.connect()
-    mbom_db.create_tables([id_generator, mat_basic_info, mat_extra_info, mat_info, bom_header,bom_item, prj_bom_link])
+    #mbom_db.create_tables([id_generator, mat_basic_info, mat_extra_info, mat_info, bom_header,bom_item,  s_change_log])
+    mbom_db.create_tables([struct_group_code, struct_gc_rel,])
     #nstd_mat_fin.get(nstd_mat_fin.mat_no=='330172045')
     #nstd_mat_fin.delete_instance(nstd_mat_table)
     
 def insert_data_into_tables():
-    q = id_generator.insert(desc='BOM header ID取号',step=1,current=1, pre_character='BH')
+    q = id_generator.insert(func_desc='BOM header ID取号',step=1,current=1, pre_character='BH')
     q.execute()
 
 def close_database():
