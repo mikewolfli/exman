@@ -35,8 +35,8 @@ import base64
 from configparser import ConfigParser
 
 NAME = 'EDS非标物料处理'
-PUBLISH_KEY=' A ' #R - release , B - Beta , A- Alpha
-VERSION = '0.1.0'
+PUBLISH_KEY=' Beta ' #R - release , B - Beta , A- Alpha
+VERSION = '0.1.1'
 
 logger = logging.getLogger()
 
@@ -458,7 +458,7 @@ class mainframe(Frame):
         if login_info['perm'][3]!='1' and login_info['perm'][3]!='9':
             self.st_body.grid_forget()
             
-        if login_info['perm'][4]!='1' and login_info['perm'][4]!='9':
+        if login_info['perm'][3]!='2' and login_info['perm'][3]!='9':
             self.ie_body.grid_forget()
                        
     def import_bom_list(self):
@@ -588,13 +588,13 @@ class mainframe(Frame):
         for mat in self.nstd_mat_list:
             line = self.mat_items[mat]
             try:
-                r=nstd_app_head.select().join(nstd_mat_table).where(nstd_mat_table.mat_no==mat).get()
+                r=nstd_app_head.select().join(nstd_mat_table).where(nstd_mat_table.mat_no==mat).naive().get()
                 nstd_app = none2str(r.nstd_app)
                 logger.error('非标物料:'+mat+'已经在非标申请:'+nstd_app+'中提交，请勿重复提交！')
                 if nstd_id != nstd_app and mat not in self.no_need_mats:
                     self.no_need_mats.append(mat)
                     self.nstd_mat_list.remove(mat)
-            except nstd_mat_table.DoesNotExist:
+            except nstd_app_head.DoesNotExist:
                 nstd_mat_table.create(mat_no=mat, mat_name_cn=line[mat_heads[2]],
                                       mat_name_en=line[mat_heads[3]], drawing_no=line[mat_heads[4]],
                                       mat_unit=line[mat_heads[6]],comments=line[mat_heads[9]],
@@ -643,10 +643,13 @@ class mainframe(Frame):
                 ws.cell(row=i+10, column=21).value ='否'
             else:
                 ws.cell(row=i+10, column=21).value = '是'
-                
+            
+            print(mat)
+            print(self.mat_tops)    
             if mat in self.mat_tops.keys():
                 rp_box = self.mat_tops[mat]['rp_box']
-                if not rp_box:
+                print(rp_box)
+                if rp_box is not None:
                     ws.cell(row=i+10, column=15).value = rp_box[1]
                     ws.cell(row=i+10, column=17).value = rp_box[0]
                                   
@@ -904,10 +907,10 @@ TKEC.SJ-F-03-03'''
         
         logger.info('开始搜索匹配的物料号...')
         if len(self.version_var.get())==0:
-            res=mat_info.select(mat_info, bom_header.bom_id, bom_header.revision,bom_header.is_active).join(bom_header, on=(bom_header.mat_no==mat_info.mat_no)).where((mat_info.mat_no.contains(self.find_var.get())) & (bom_header.is_active==True))\
+            res=mat_info.select(mat_info,bom_header.struct_code, bom_header.bom_id, bom_header.revision,bom_header.is_active).join(bom_header, on=(bom_header.mat_no==mat_info.mat_no)).where((mat_info.mat_no.contains(self.find_var.get())) & (bom_header.is_active==True))\
                 .order_by(mat_info.mat_no.asc()).naive()  
         else:                 
-            res=mat_info.select(mat_info, bom_header.bom_id, bom_header.revision,bom_header.is_active).join(bom_header, on=(bom_header.mat_no==mat_info.mat_no)).where((mat_info.mat_no.contains(self.find_var.get())) & (bom_header.revision==self.version_var.get())& (bom_header.is_active==True))\
+            res=mat_info.select(mat_info, bom_header.bom_id,bom_header.struct_code, bom_header.revision,bom_header.is_active).join(bom_header, on=(bom_header.mat_no==mat_info.mat_no)).where((mat_info.mat_no.contains(self.find_var.get())) & (bom_header.revision==self.version_var.get())& (bom_header.is_active==True))\
                 .order_by(mat_info.mat_no.asc()).naive()
             
         if not res:
@@ -932,8 +935,8 @@ TKEC.SJ-F-03-03'''
             line[mat_heads[8]]= none2str(l.part_weight)
             line[mat_heads[9]]= '' 
             
-            revision = none2str(l.rp)
-            struct_code = none2str(l.box_code_sj)
+            revision = none2str(l.revision)
+            struct_code = none2str(l.struct_code)
                  
             if len(struct_code)>0 and mat not in self.mat_tops:
                 re['revision']=revision
@@ -1053,7 +1056,7 @@ TKEC.SJ-F-03-03'''
         
         if para['mat_no'] in self.mat_tops.keys():
             rp_box=  self.mat_tops[para['mat_no']]['rp_box']
-            if not rp_box:
+            if rp_box is not None:
                 b_level=True
             
         try:
