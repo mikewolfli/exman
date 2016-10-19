@@ -78,8 +78,8 @@ Nonstd_Level={
     23: 'Others'
 }
 
-mbom_db = PostgresqlDatabase('nstd_mat_db',user='postgres',password='',host='localhost',)
-#mbom_db = PostgresqlDatabase('nstd_mat_db',user='postgres',password='1q2w3e4r',host='10.127.144.62',)
+#mbom_db = PostgresqlDatabase('nstd_mat_db',user='postgres',password='',host='localhost',)
+mbom_db = PostgresqlDatabase('nstd_mat_db',user='postgres',password='1q2w3e4r',host='10.127.144.62',)
 #mbom_db = PostgresqlDatabase('nstd_mat_db_test',user='postgres',password='1q2w3e4r',host='10.127.144.62',)
 
 class BaseModel(Model):
@@ -232,6 +232,7 @@ class mat_info(BaseModel):
     mat_unit = CharField(max_length=16, choices=Unit_Types)
     comments = TextField(null=True) 
     rp = CharField(null=True, max_length=6)  
+    rp_zs = CharField(null=True, max_length=6)
     box_code_sj = CharField(null=True, max_length=8)
     box_code_zs = CharField(null=True, max_length=8) 
     is_nonstd = BooleanField(default=False)  
@@ -296,6 +297,7 @@ class nstd_mat_table(BaseModel):
     mat_unit = CharField(max_length=16, choices=Unit_Types)
     comments = TextField(null=True)
     rp = CharField(null=True, max_length=6)
+    rp_zs = CharField(null=True, max_length=6)
     group_code = CharField(null=True, max_length=16)
     box_code_sj = CharField(null=True, max_length=8)
     box_code_zs = CharField(null=True, max_length=8)

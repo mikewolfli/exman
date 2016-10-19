@@ -7,6 +7,7 @@ Created on 2016年7月19日
 '''
 import os,sys
 from tkinter import *
+from tkinter import filedialog
 from tkinter import simpledialog
 from tkinter import font
 from tkinter import scrolledtext
@@ -15,7 +16,7 @@ from tkinter import filedialog
 import tkinter.ttk as ttk
 #import pandas as pd
 #from pandastable import Table, TableModel
-from ldap3 import Server, Connection, SIMPLE, SYNC, ALL, SASL, NTLM
+import ctypes
 from dataset import * 
 import logging 
 import datetime
@@ -35,8 +36,8 @@ import base64
 from configparser import ConfigParser
 
 NAME = 'EDS非标物料处理'
-PUBLISH_KEY=' Beta ' #R - release , B - Beta , A- Alpha
-VERSION = '0.1.1'
+PUBLISH_KEY=' R ' #R - release , B - Beta , A- Alpha
+VERSION = '2.1.0'
 
 logger = logging.getLogger()
 
@@ -87,6 +88,8 @@ def str2datetime(dt_s):
 def none2str(val):
     if not val:
         return ''
+    elif val=="''":
+        return ''
     else:
         return str(val).strip()
     
@@ -109,6 +112,51 @@ def tree_level(val):
             r+=1
             
     return r
+
+def format_system_message(errno):
+    """
+    Call FormatMessage with a system error number to retrieve
+    the descriptive error message.
+    """
+    # first some flags used by FormatMessageW
+    ALLOCATE_BUFFER = 0x100
+    ARGUMENT_ARRAY = 0x2000
+    FROM_HMODULE = 0x800
+    FROM_STRING = 0x400
+    FROM_SYSTEM = 0x1000
+    IGNORE_INSERTS = 0x200
+    # Let FormatMessageW allocate the buffer (we'll free it below)
+    # Also, let it know we want a system error message.
+    flags = ALLOCATE_BUFFER | FROM_SYSTEM
+    source = None
+    message_id = errno
+    language_id = 0
+    #result_buffer = ctypes.wintypes.LPWSTR()
+    result_buffer = ctypes.c_wchar_p()
+    buffer_size = 0
+    arguments = None
+    bytes = ctypes.windll.kernel32.FormatMessageW(
+        flags,
+        source,
+        message_id,
+        language_id,
+        ctypes.byref(result_buffer),
+        buffer_size,
+        arguments,
+        )
+    # note the following will cause an infinite loop if GetLastError
+    #  repeatedly returns an error that cannot be formatted, although
+    #  this should not happen.
+    #handle_nonzero_success(bytes)
+    message = result_buffer.value
+    ctypes.windll.kernel32.LocalFree(result_buffer)
+    return message
+
+def handle_nonzero_success(result):
+    if result == 0:
+        value = ctypes.windll.kernel32.GetLastError()
+        strerror = format_system_message(value)
+        raise(WindowsError(value, strerror))
 
 def center(toplevel):
     toplevel.update_idletasks()
@@ -215,20 +263,33 @@ class LoginForm(Toplevel):
             self.initial_focus=self.uid_entry
             self.initial_focus.focus_set()
             return 0
-            
-        s = Server('tkeasia.com', get_info=ALL)
-        c = Connection(s, user="tkeasia\\"+login_info['uid'], password=login_info['pwd'], authentication=NTLM)
-        ret = c.bind()
-        if ret:
+    
+        puid=ctypes.c_char_p(login_info['uid'].encode('utf-8'))
+        ppwd=ctypes.c_char_p(login_info['pwd'].encode('utf-8'))
+        pdomain=ctypes.c_char_p(b'tkeasia.com')
+        logintype=ctypes.c_uint32()
+        loginprovider=ctypes.c_uint32()
+        logintype.value=3
+        loginprovider.value=0
+        token=ctypes.pointer(ctypes.c_int32(0))
+        ret=ctypes.windll.Advapi32.LogonUserA(puid,pdomain,ppwd,logintype,loginprovider,ctypes.byref(token)) 
+        last_error = ctypes.windll.kernel32.GetLastError()
+        if ret == 1:
             login_info['status'] = True
             self.get_permission()
             self.log_login()
             
             logger.info(login_info['uid']+"登陆系统...")
             return 1
+        elif last_error==1326:
+            self.msg_str.set('帐户密码错误')
+            self.initial_focus = self.pwd_entry
+            self.initial_focus.focus_set()
+            return 0
         else:
+            value = format_system_message(last_error)
             self.msg_str.set('登陆失败！')
-            messagebox.showerror('错误', c.last_error)
+            messagebox.showerror('错误', str(last_error)+':'+value)
             return 0
         
     def destroy(self):
@@ -312,7 +373,6 @@ class mainframe(Frame):
     └── 2
     '''
     hibe_mats=[]
-    no_need_mats=[]
     mat_list = {} #从文件读取的文件列表，以 数字1，2，...为keys
     bom_items = [] #存储有下层BOM的节点，treeview 控件的节点
     mat_items = {} #以物料号为key,存储涉及BOM的物料清单 ，包括下层物料。
@@ -323,6 +383,7 @@ class mainframe(Frame):
     mat_tops={} #发运层物料字典，key为物料号，value是struct code 和revision列表
     nstd_mat_list=[] #非标物料列表
     sap_thread = None
+    nstd_app_id=''
     def __init__(self,master=None):
         Frame.__init__(self, master)
         self.pack()
@@ -354,11 +415,12 @@ class mainframe(Frame):
         self.version_text.bind("<Return>", self.search)
                 
         self.st_body = Frame(self)
-        self.st_body.grid(row=0, column=4,sticky=NSEW)
+        self.st_body.grid(row=0, column=4, rowspan=2, columnspan=4, sticky=NSEW)
         
         self.import_button = Button(self.st_body, text='文件读取')
-        self.import_button.pack(side='left')
+        self.import_button.grid(row=0, column=0, sticky=NSEW)
         self.import_button['command'] = self.excel_import
+        
         '''
         self.check_sap = Button(st_body, text='非标物料系统比对')
         self.check_sap.pack(side='left')
@@ -366,11 +428,23 @@ class mainframe(Frame):
         '''
         
         self.generate_nstd_list = Button(self.st_body, text='生成非标物料申请表')
-        self.generate_nstd_list.pack(side='left')
+        self.generate_nstd_list.grid(row=1, column=0, sticky=NSEW)
         self.generate_nstd_list['command']=self.generate_app
+        
+        self.pdm_generate_button = Button(self.st_body, text='PDM物料导入文件生成\n(物料清单和BOM清单)')
+        self.pdm_generate_button.grid(row=0, column=1, rowspan=2, sticky=NSEW)
+        self.pdm_generate_button['command'] = self.pdm_generate
+        
+        self.para_label = Label(self.st_body,text='搜索参数', anchor ='w')
+        self.para_label.grid(row=0, column=2, columnspan=2, sticky=EW)
+        
+        self.para_var = StringVar()
+        self.para_text = Entry(self.st_body, textvariable=self.para_var)
+        self.para_text.grid(row=1, column=2, columnspan=2, sticky=EW)
+        self.para_text.bind("<Return>", self.para_search)        
                
         self.ie_body = Frame(self)
-        self.ie_body.grid(row=1, column=4, columnspan=10, sticky=NSEW)
+        self.ie_body.grid(row=0, column=8, columnspan=2, sticky=NSEW)
         
         self.import_bom_List = Button(self.ie_body, text='生成BOM导入表')
         self.import_bom_List.pack(side='left')
@@ -441,8 +515,8 @@ class mainframe(Frame):
         log_pane.rowconfigure(1,weight=1)
         log_pane.columnconfigure(1, weight=1)
         
-        self.ntbook.grid(row=2, column=0, rowspan=6, columnspan=6, sticky=NSEW)
-        log_pane.grid(row=8, column=0,columnspan=6, sticky=NSEW)
+        self.ntbook.grid(row=2, column=0, rowspan=6, columnspan=12, sticky=NSEW)
+        log_pane.grid(row=8, column=0,columnspan=12, sticky=NSEW)
               
         # Create textLogger
         text_handler = TextHandler(self.log_text)        
@@ -452,7 +526,103 @@ class mainframe(Frame):
         logger.setLevel(logging.INFO) 
         
         self.rowconfigure(8, weight=1)
-        self.columnconfigure(5, weight=1) 
+        self.columnconfigure(11, weight=1) 
+    
+    def pdm_generate(self):
+        if len(self.bom_items)==0:
+            logger.warning('没有bom结构，请先搜索物料BOM')
+            return
+    
+        if self.sap_thread is not None and self.sap_thread.is_alive():
+            messagebox.showinfo('提示','正在后台检查SAP非标物料，请等待完成后再点击!')
+            return  
+        
+        if len(self.nstd_mat_list) == 0:
+            logger.warning('此物料BOM中包含未维护进SAP系统的物料，请等待其维护完成')
+            return
+        
+        if len(self.nstd_app_id)==0:
+            logger.warning('请先生成非标申请表，填入非标单号后生成此文件')
+            return
+        
+        gen_dir = filedialog.askdirectory(title="请选择输出文件保存的文件夹!")
+        if not gen_dir or len(gen_dir)==0:
+            return        
+
+        temp_file = os.path.join(cur_dir(),'PDMT1.xls')
+        rb = xlrd.open_workbook(temp_file, formatting_info=True)
+                
+        wb= copy(rb)
+        ws = wb.get_sheet(0)
+        
+        #now = datetime.datetime.now()
+        #s_now = now.strftime('%Y%m%d%H%M%S')
+        file_name = self.nstd_app_id+'物料清单.xls'
+        pdm_mats_str =os.path.join(gen_dir, file_name)
+        logger.info('正在生成导入物料清单文件:'+pdm_mats_str)
+        i=2
+        for it in self.nstd_mat_list:
+            ws.write(i,0, it)
+            value = self.mat_items[it]
+            
+            ws.write(i,1, value[mat_heads[4]])
+            ws.write(i,3, value[mat_heads[2]])
+            ws.write(i,4, value[mat_heads[3]])
+            ws.write(i, 6, value[mat_heads[7]])
+            ws.write(i,8, value[mat_heads[6]])
+            ws.write(i, 9, value[mat_heads[9]])
+            ws.write(i, 11, 'EDS系统')
+            
+            if it in self.mat_tops:
+                rp_box = self.mat_tops[it]['rp_box']
+                ws.write(i,12,rp_box['2101'][0])
+                ws.write(i,13,rp_box['2101'][1])
+                ws.write(i,14,rp_box['2001'][0])
+                ws.write(i,15,rp_box['2001'][1])
+ 
+            i+=1
+                        
+        wb.save(pdm_mats_str)
+        logger.info(pdm_mats_str+'保存完成!')
+        
+        temp_file = os.path.join(cur_dir(),'PDMT2.xlsx')
+        logger.info('正在根据模板文件:'+temp_file+'生成PDM BOM导入清单...')
+        wb = load_workbook(temp_file) 
+        temp_ws = wb.get_sheet_by_name('template')
+        
+        for it in self.bom_items:
+            p_mat = self.mat_tree.item(it, 'values')[1]
+            ws = wb.copy_worksheet(temp_ws)     
+            ws.sheet_state ='visible'
+            ws.title = p_mat
+            
+            logger.info('正在构建物料'+p_mat+'的PDM BOM导入清单...')
+            p_name = self.mat_tree.item(it, 'values')[2]
+            p_drawing = self.mat_tree.item(it,'values')[4]
+            ws.cell(row=43, column=18).value = p_mat
+            ws.cell(row=41, column=18).value = p_name
+            ws.cell(row=45, column=18).value = p_drawing
+            ws.cell(row=41, column=10).value = 'L'+p_mat
+            children = self.mat_tree.get_children(it)
+            i=4
+            for child in children:
+                value = self.mat_tree.item(child, 'values')
+                ws.cell(row=i, column=2).value = value[1]
+                ws.cell(row=i, column=5).value = value[4]
+                ws.cell(row=i, column=10).value = value[6]
+                ws.cell(row=i, column=13).value = value[2]
+                ws.cell(row=i, column=16).value = value[7]
+                ws.cell(row=i, column=20).value = value[5]
+                ws.cell(row=i, column=23).value = value[9]
+                i+=1
+                
+        wb.remove_sheet(temp_ws)
+        file_name = self.nstd_app_id+'PDM BOM物料导入清单.xlsx'
+        pdm_bom_str = os.path.join(gen_dir, file_name)
+        if writer.excel.save_workbook(workbook=wb, filename=pdm_bom_str):
+            logger.info('生成PDM BOM导入清单:'+pdm_bom_str+' 成功!')
+        else:
+            logger.info('文件保存失败!')
     
     def display_widgets(self):
         if login_info['perm'][3]!='1' and login_info['perm'][3]!='9':
@@ -465,15 +635,15 @@ class mainframe(Frame):
         if len(self.bom_items)==0:
             logger.warning('没有bom结构，请先搜索物料BOM')
             return
-        
-        if self.sap_thread.is_alive():
+    
+        if self.sap_thread is not None and self.sap_thread.is_alive():
             messagebox.showinfo('提示','正在后台检查SAP非标物料，请等待完成后再点击!')
             return  
         
         if len(self.nstd_mat_list) != 0:
-            logger.warning('此物料BOM中包含未维护进系统的物料，请等待其维护完成')
+            logger.warning('此物料BOM中包含未维护进SAP系统的物料，请等待其维护完成')
             return
-
+        
         file_str=filedialog.asksaveasfilename(title="导出文件", initialfile="temp",filetypes=[('excel file','.xls')])
         if not file_str:
             return
@@ -522,6 +692,10 @@ class mainframe(Frame):
             return
         
         nstd_id = simpledialog.askstring('非标申请编号','请输入完整非标申请编号(不区分大小写)，系统将自动关联项目:')
+        
+        if nstd_id is None:
+            return
+        
         nstd_id = nstd_id.upper().strip()
         
         basic_info = self.get_rel_nstd_info(nstd_id)
@@ -529,7 +703,7 @@ class mainframe(Frame):
             logger.warning('非标申请：'+nstd_id+'在流程软件中未创建，请先创建后再生成非标物料申请表!')
             return
         
-        file_str=filedialog.asksaveasfilename(title="导出文件", initialfile="temp",filetypes=[('excel file','.xlsx')])
+        file_str=filedialog.asksaveasfilename(title="导出文件", initialfile=nstd_id,filetypes=[('excel file','.xlsx')])
         if not file_str:
             return
 
@@ -562,6 +736,8 @@ class mainframe(Frame):
             self.fill_nstd_app_table(ws, i, nstd_id, basic_info,m_qty)
         
         wb.remove_sheet(temp_ws)
+        
+        self.nstd_app_id = nstd_id
         if writer.excel.save_workbook(workbook=wb, filename=file_str):
             logger.info('生成非标物料申请文件:'+file_str+' 成功!')
         else:
@@ -569,7 +745,7 @@ class mainframe(Frame):
     
     def create_nstd_mat_table(self, nstd_id, res):
         logger.info('正在保存非标物料到维护列表中...')
-        self.no_need_mats=[]
+        no_need_mats=[]
         try:
             nstd_app_head.get(nstd_app_head.nstd_app == nstd_id)
             logger.warning('非标申请:'+nstd_id+'已经存在，故未重新创建!')        
@@ -584,21 +760,32 @@ class mainframe(Frame):
             if  len(wbs.strip())==0 and len(wbs_list)>1:
                 continue
             nstd_app_link.get_or_create(nstd_app=nstd_id, wbs_no=wbs, mbom_fin=False) 
-
+        
         for mat in self.nstd_mat_list:
             line = self.mat_items[mat]
             try:
                 r=nstd_app_head.select().join(nstd_mat_table).where(nstd_mat_table.mat_no==mat).naive().get()
                 nstd_app = none2str(r.nstd_app)
                 logger.error('非标物料:'+mat+'已经在非标申请:'+nstd_app+'中提交，请勿重复提交！')
-                if nstd_id != nstd_app and mat not in self.no_need_mats:
-                    self.no_need_mats.append(mat)
-                    self.nstd_mat_list.remove(mat)
+                if nstd_id != nstd_app and mat not in no_need_mats:
+                    no_need_mats.append(mat)
             except nstd_app_head.DoesNotExist:
+                rp_sj=''
+                box_sj=''
+                rp_zs=''
+                box_zs=''
+                if mat in self.mat_tops.keys():
+                    rp_box = self.mat_tops[mat]['rp_box']
+                    if rp_box is not None:
+                        rp_sj = rp_box['2101'][0]
+                        box_sj = rp_box['2101'][1]
+                        rp_zs = rp_box['2001'][0]
+                        box_zs = rp_box['2001'][1]
+                        
                 nstd_mat_table.create(mat_no=mat, mat_name_cn=line[mat_heads[2]],
                                       mat_name_en=line[mat_heads[3]], drawing_no=line[mat_heads[4]],
                                       mat_unit=line[mat_heads[6]],comments=line[mat_heads[9]],
-                                      rp='',box_code_sj='',
+                                      rp=rp_sj,box_code_sj=box_sj,rp_zs=rp_zs,box_code_zs=box_zs,
                                       nstd_app = nstd_id, mat_app_person=res['app_person'])
 
             try:
@@ -606,7 +793,10 @@ class mainframe(Frame):
             except nstd_mat_fin.DoesNotExist:
                 nstd_mat_fin.create(mat_no=mat,justify=-1, mbom_fin=False,\
                                     pu_price_fin=False, co_run_fin=False, modify_by=login_info['uid'], modify_on=datetime.datetime.now())
-        
+         
+        for mat in no_need_mats:
+            self.nstd_mat_list.remove(mat)
+                   
         if len(self.nstd_mat_list)==0:
             logger.error(' 所有非标物料已经在另外的非标申请中提交，请勿重复提交!') 
             return False
@@ -623,10 +813,12 @@ class mainframe(Frame):
         
         if page==1 and count<=28:
             ran=count
-        elif (count%((page-1)*28)>28 and page>1) or (page==1 and count>28):
+        elif (page==1 and count>28):
+            ran = 28
+        elif (count%((page-1)*28)>28 and page>1):
             ran = 28
         else:
-            ran = count%(page*28)
+            ran = count%((page-1)*28)
         
         for i in range(1, ran+1):
             mat = self.nstd_mat_list[((page-1)*28+i-1)]
@@ -643,15 +835,12 @@ class mainframe(Frame):
                 ws.cell(row=i+10, column=21).value ='否'
             else:
                 ws.cell(row=i+10, column=21).value = '是'
-            
-            print(mat)
-            print(self.mat_tops)    
+             
             if mat in self.mat_tops.keys():
                 rp_box = self.mat_tops[mat]['rp_box']
-                print(rp_box)
                 if rp_box is not None:
-                    ws.cell(row=i+10, column=15).value = rp_box[1]
-                    ws.cell(row=i+10, column=17).value = rp_box[0]
+                    ws.cell(row=i+10, column=15).value = rp_box[login_info['plant']][1]
+                    ws.cell(row=i+10, column=17).value = rp_box[login_info['plant']][0]
                                   
     def style_worksheet(self, ws):        
         thin = Side(border_style="thin", color="000000")
@@ -826,6 +1015,7 @@ TKEC.SJ-F-03-03'''
         
     def check_in_sap(self):
         self.nstd_mat_list=[]
+        self.nstd_app_id=''
         self.hibe_mats=[]
                 
         logger.info("正在登陆SAP...")
@@ -886,7 +1076,7 @@ TKEC.SJ-F-03-03'''
         else:
             q = mat_info.update(is_nonstd=non).where(mat_info.mat_no==mat)
             r = q.execute()
-            if(r>0):
+            if r>0:
                 self.change_log('mat_info', 'is_nonstd',mat , (not non), non)
                 
             return r
@@ -935,21 +1125,32 @@ TKEC.SJ-F-03-03'''
             line[mat_heads[8]]= none2str(l.part_weight)
             line[mat_heads[9]]= '' 
             
-            revision = none2str(l.revision)
-            struct_code = none2str(l.struct_code)
+            #revision = none2str(l.revision)
+            #struct_code = none2str(l.struct_code)
+            
+            re['revision']=none2str(l.revision)
+            re['struct_code']=none2str(l.struct_code)
                  
-            if len(struct_code)>0 and mat not in self.mat_tops:
-                re['revision']=revision
-                re['struct_code']=struct_code
-                rp_box=[]
-                if len(none2str(l.rp))!=0 or len(none2str(l.box_code_sj))!=0:
-                    rp_box.append(none2str(l.rp))
-                    rp_box.append(none2str(l.box_code_sj))
-                else:
-                    rp_box=None
+            #if len(struct_code)>0 and mat not in self.mat_tops:
+            #re['revision']=revision
+            #re['struct_code']=struct_code
+            rp_box={}
+            if len(none2str(l.rp))!=0 or len(none2str(l.box_code_sj))!=0 or \
+                len(none2str(l.rp_zs))!=0 or len(none2str(l.box_code_zs))!=0:
+                lt=[]
+                lt.append(none2str(l.rp))
+                lt.append(none2str(l.box_code_sj))
+                rp_box['2101']=lt
+                lt=[]                    
+                lt.append(none2str(l.rp_zs))
+                lt.append(none2str(l.box_code_zs))
+                rp_box['2001']=lt
                 re['rp_box'] = rp_box
                 self.mat_tops[mat]=re
-                
+            #else:
+            #   rp_box=None
+            #re['rp_box'] = rp_box
+            #self.mat_tops[mat]=re                
             is_nstd = l.is_nonstd
             if is_nstd and mat not in self.nstd_mat_list:
                 self.nstd_mat_list.append(mat)
@@ -964,9 +1165,76 @@ TKEC.SJ-F-03-03'''
                 self.bom_items.append(item) 
        
         logger.info('正在与SAP匹配确认非标物料，请勿进行其他操作！')
-        self.run_check_in_sap()         
+        self.run_check_in_sap()  
+    
+    def para_search(self, event=None):  
+        if len(self.para_var.get())==0:
+            logger.warning("参数不能为空，请务必填写 参数")
+            return
+        
+        self.mat_tops = {}        
+        self.mat_items={}
+        self.mat_list = {}
+        self.bom_items = [] 
+        self.nstd_mat_list = []
+        
+        for row in self.mat_tree.get_children():
+            self.mat_tree.delete(row) 
+        
+        logger.info('开始搜索匹配的物料号...')
+                
+        res=mat_info.select(mat_info, bom_header.bom_id,bom_header.struct_code, bom_header.revision,bom_header.is_active).join(bom_header, on=(bom_header.mat_no==mat_info.mat_no)).where((mat_info.mat_name_cn.contains(self.para_var.get()) | mat_info.comments.contains(self.para_var.get()))& (bom_header.is_active==True))\
+                .order_by(mat_info.mat_no.asc()).naive()
+            
+        if not res:
+            logger.warning("没有与搜索条件匹配的物料号.")
+            return 
+        
+        for l in res:
+            line = {}
+            re = {}
+
+            mat = none2str(l.mat_no)
+            rev = none2str(l.revision)
+                        
+            line[mat_heads[0]]= rev
+            line[mat_heads[1]]= mat
+            line[mat_heads[2]]= none2str(l.mat_name_cn)
+            line[mat_heads[3]]= none2str(l.mat_name_en)
+            line[mat_heads[4]]= none2str(l.drawing_no)
+            line[mat_heads[5]]= 0
+            line[mat_heads[6]]= none2str(l.mat_unit)
+            line[mat_heads[7]]= none2str(l.mat_material)
+            line[mat_heads[8]]= none2str(l.part_weight)
+            line[mat_heads[9]]= '' 
+            
+            re['revision']=none2str(l.revision)
+            re['struct_code']=none2str(l.struct_code)
+                 
+            rp_box={}
+            if len(none2str(l.rp))!=0 or len(none2str(l.box_code_sj))!=0 or \
+                len(none2str(l.rp_zs))!=0 or len(none2str(l.box_code_zs))!=0:
+                lt=[]
+                lt.append(none2str(l.rp))
+                lt.append(none2str(l.box_code_sj))
+                rp_box['2101']=lt
+                lt=[]                    
+                lt.append(none2str(l.rp_zs))
+                lt.append(none2str(l.box_code_zs))
+                rp_box['2001']=lt
+                re['rp_box'] = rp_box
+                self.mat_tops[mat]=re
+                    
+            if mat not in self.mat_items.keys():
+                self.mat_items[mat]=line
+            
+            item = self.mat_tree.insert('', END, values=dict2list(line))
+             
+            self.mat_list[item]=line
+            if self.get_sub_bom(item, mat, rev, False):
+                self.bom_items.append(item)     
                      
-    def get_sub_bom(self,item, mat, rev=''):
+    def get_sub_bom(self,item, mat, rev='', nstd_check=True):
         r = bom_header.select(bom_header, bom_item, mat_info).join(bom_item, on=(bom_header.bom_id==bom_item.bom_id)).switch(bom_item).join(mat_info, on=(bom_item.component==mat_info.mat_no))\
               .where((bom_header.mat_no==mat)&(bom_header.revision==rev)&(bom_header.is_active==True)).order_by(bom_item.index.asc()).naive()
         
@@ -990,17 +1258,18 @@ TKEC.SJ-F-03-03'''
             line[mat_heads[8]]= none2str(l.part_weight)
             line[mat_heads[9]]= none2str(l.bom_remark)
             
-            is_nstd = l.is_nonstd
-            if is_nstd and mat not in self.nstd_mat_list:
-                self.nstd_mat_list.append(mat)
+            if nstd_check==True:
+                is_nstd = l.is_nonstd
+                if is_nstd and mat not in self.nstd_mat_list:
+                    self.nstd_mat_list.append(mat)
                 
             tree_item = self.mat_tree.insert(item, END, values=dict2list(line))
             self.mat_list[tree_item]=line
                    
             if mat not in self.mat_items.keys():
                 self.mat_items[mat]=line
-            
-            if self.get_sub_bom(tree_item, mat):
+             
+            if self.get_sub_bom(tree_item, mat, '', nstd_check):
                 self.bom_items.append(tree_item)
         
         logger.info('构建物料:'+mat+'下层BOM完成!')        
@@ -1063,8 +1332,8 @@ TKEC.SJ-F-03-03'''
             mat_info.get(mat_info.mat_no == para['mat_no'])
             if method:
                 if b_level:
-                    q = mat_info.update(mat_name_en=para['mat_name_en'], mat_name_cn=para['mat_name_cn'], drawing_no=para['drawing_no'],mat_material=para['mat_material'],mat_unit=para['mat_unit'],rp=rp_box[0], box_cod_sj=rp_box[1],\
-                                mat_material_en=para['mat_material_en'],part_weight=para['part_weight'],comments=para['comments'],modify_by=login_info['uid'],modify_on=datetime.datetime.now()).where(mat_info.mat_no==para['mat_no']) 
+                    q = mat_info.update(mat_name_en=para['mat_name_en'], mat_name_cn=para['mat_name_cn'], drawing_no=para['drawing_no'],mat_material=para['mat_material'],mat_unit=para['mat_unit'],rp=rp_box['2101'][0], box_code_sj=rp_box['2101'][1],\
+                               rp_zs=rp_box['2001'][0],box_code_zs=rp_box['2001'][1],mat_material_en=para['mat_material_en'],part_weight=para['part_weight'],comments=para['comments'],modify_by=login_info['uid'],modify_on=datetime.datetime.now()).where(mat_info.mat_no==para['mat_no']) 
                 else:
                     q = mat_info.update(mat_name_en=para['mat_name_en'], mat_name_cn=para['mat_name_cn'], drawing_no=para['drawing_no'],mat_material=para['mat_material'],mat_unit=para['mat_unit'],\
                                 mat_material_en=para['mat_material_en'],part_weight=para['part_weight'],comments=para['comments'],modify_by=login_info['uid'],modify_on=datetime.datetime.now()).where(mat_info.mat_no==para['mat_no'])
@@ -1072,7 +1341,7 @@ TKEC.SJ-F-03-03'''
         except mat_info.DoesNotExist:
             if b_level:
                 q = mat_info.insert(mat_no=para['mat_no'], mat_name_en=para['mat_name_en'], mat_name_cn=para['mat_name_cn'], drawing_no=para['drawing_no'],mat_material=para['mat_material'],mat_unit=para['mat_unit'],\
-                                mat_material_en=para['mat_material_en'],part_weight=para['part_weight'],rp=rp_box[0],box_code_sj=rp_box[1],comments=para['comments'],modify_by=login_info['uid'],modify_on=datetime.datetime.now())
+                                mat_material_en=para['mat_material_en'],part_weight=para['part_weight'],rp=rp_box['2101'][0],box_code_sj=rp_box['2101'][1],rp_zs=rp_box['2001'][0],box_code_zs=rp_box['2001'][1],comments=para['comments'],modify_by=login_info['uid'],modify_on=datetime.datetime.now())
             else:
                 q = mat_info.insert(mat_no=para['mat_no'], mat_name_en=para['mat_name_en'], mat_name_cn=para['mat_name_cn'], drawing_no=para['drawing_no'],mat_material=para['mat_material'],mat_unit=para['mat_unit'],\
                                 mat_material_en=para['mat_material_en'],part_weight=para['part_weight'],comments=para['comments'],modify_by=login_info['uid'],modify_on=datetime.datetime.now())
@@ -1134,17 +1403,17 @@ TKEC.SJ-F-03-03'''
         q=bom_item.insert_many(data)
         return q.execute()
                         
-    def get_rp_boxid(self, struct):
-        rp_box = []
-        
-        try:
-            r=struct_gc_rel.get(struct_gc_rel.st_code==struct, struct_gc_rel.plant==login_info['plant'])
-        except struct_gc_rel.DoesNotExist:
-            return None
-        
-        rp_box.append(r.rp)
-        rp_box.append(r.box_code)
-        
+    def get_rp_boxid(self, struct, plant='2101'):
+        rp_box = {}
+               
+        res=struct_gc_rel.select().where(struct_gc_rel.st_code==struct)
+           
+        for r in res:
+            lt=[]
+            lt.append(r.rp)
+            lt.append(r.box_code)
+            rp_box[r.plant]= lt
+      
         return rp_box
     
     def save_mats_bom(self):
@@ -1293,10 +1562,17 @@ TKEC.SJ-F-03-03'''
                     
                 mat_line[mat_heads[9]]=cell2str(ws.cell(row=2*j+1, column=11).value)
                 
-                if sheetnames[i]=='1' and j==1:
-                    mat_top_line['revision'] = cell2str(ws.cell(row=43, column=8).value)
-                    mat_top_line['struct_code']=cell2str(ws.cell(row=39,column=12).value)
-                    rp_box = self.get_rp_boxid(mat_top_line['struct_code'])
+                len_of_st = len(mat_line[mat_heads[0]])
+                str_code = cell2str(ws.cell(row=39,column=12).value)
+                if len_of_st <=1:
+                    if len_of_st==0:
+                        mat_top_line['revision'] = cell2str(ws.cell(row=43, column=8).value)
+                        mat_top_line['struct_code']=str_code
+                    else:
+                        mat_top_line['revision'] = ''
+                        mat_top_line['struct_code']=''
+                                            
+                    rp_box = self.get_rp_boxid(str_code)
                     mat_top_line['rp_box'] = rp_box
                     
                     self.mat_tops[mat_line[mat_heads[1]]]=mat_top_line
