@@ -37,7 +37,7 @@ from configparser import ConfigParser
 
 NAME = 'EDS非标物料处理'
 PUBLISH_KEY=' R ' #R - release , B - Beta , A- Alpha
-VERSION = '2.1.0'
+VERSION = '2.2.0'
 
 logger = logging.getLogger()
 
@@ -811,19 +811,13 @@ class mainframe(Frame):
         wbses = res['units']
         ws.cell(row=7, column=12).value = self.combine_wbs(wbses)
         
-        if page==1 and count<=28:
-            ran=count
-        elif (page==1 and count>28):
-            ran = 28
-        elif (count%((page-1)*28)>28 and page>1):
+        if count-count%(page*28)>0:
             ran = 28
         else:
-            ran = count%((page-1)*28)
+            ran = count%28
         
         for i in range(1, ran+1):
             mat = self.nstd_mat_list[((page-1)*28+i-1)]
-            if page==2:
-                print(mat)
             line = self.mat_items[mat]
             ws.cell(row=i+10, column=3).value = line[mat_heads[2]]
             ws.cell(row=i+10, column=4).value = line[mat_heads[3]]
