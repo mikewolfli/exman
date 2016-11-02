@@ -822,6 +822,8 @@ class mainframe(Frame):
         
         for i in range(1, ran+1):
             mat = self.nstd_mat_list[((page-1)*28+i-1)]
+            if page==2:
+                print(mat)
             line = self.mat_items[mat]
             ws.cell(row=i+10, column=3).value = line[mat_heads[2]]
             ws.cell(row=i+10, column=4).value = line[mat_heads[3]]

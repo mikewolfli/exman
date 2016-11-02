@@ -7,7 +7,6 @@ Created on 2016年8月26日
 from openpyxl.styles import Border, Side, PatternFill, Font, GradientFill, Alignment
 from openpyxl import Workbook
 
-
 def style_range(ws, cell_range, border=Border(), fill=None, font=None, alignment=None):
     """
     Apply styles to a range of cells as if they were a single cell.
